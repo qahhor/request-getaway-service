@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # REDPANDA (Kafka)
+  # ==========================================
+  redpanda:
+    image: redpandadata/redpanda:v24.1.1
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --smp 1
+      - --memory 1G
+      - --mode dev-container
+      - --default-log-level=info
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "19644:9644"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # KAFKA CONSOLE (UI)
+  # ==========================================
+  redpanda-console:
+    image: redpandadata/console:v2.4.5
+    container_name: redpanda-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://redpanda:8081"]
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml && /app/console'
+
+  # ==========================================
+  # KAFKA TOPICS INIT
+  # ==========================================
+  kafka-init:
+    image: redpandadata/redpanda:v24.1.1
+    container_name: kafka-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      
+      rpk topic create bmb.request.new --brokers redpanda:9092 --partitions 10 --replicas 1
+      rpk topic create bmb.request.response --brokers redpanda:9092 --partitions 10 --replicas 1
+      rpk topic create bmb.request.callback --brokers redpanda:9092 --partitions 10 --replicas 1
+      rpk topic create bmb.request.dlq --brokers redpanda:9092 --partitions 3 --replicas 1
+      
+      echo 'Topics created:'
+      rpk topic list --brokers redpanda:9092
+      "
+
+  # ==========================================
+  # REDIS
+  # ==========================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # REDIS COMMANDER (UI)
+  # ==========================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8085:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+
+volumes:
+  redpanda_data:
+  redis_data:

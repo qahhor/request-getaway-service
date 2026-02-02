@@ -1,0 +1,73 @@
+spring:
+  application:
+    name: request-gateway-service
+
+  # Kafka
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    consumer:
+      group-id: gateway-service-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "uz.greenwhite.gateway.model"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+  # Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  # Oracle (hozircha disable, keyinroq enable qilamiz)
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+
+  # Redis enabled
+
+# Server
+server:
+  port: 8090
+
+# Actuator
+management:
+  server:
+    port: 8091
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+# Gateway settings
+gateway:
+  polling:
+    enabled: true
+    interval-ms: 5000
+    batch-size: 100
+  http:
+    connect-timeout-ms: 10000
+    read-timeout-ms: 30000
+    write-timeout-ms: 30000
+  retry:
+    max-attempts: 3
+    backoff-ms: 5000
+  kafka:
+    topics:
+      request-new: bmb.request.new
+      request-response: bmb.request.response
+      request-callback: bmb.request.callback
+      request-dlq: bmb.request.dlq
+
+# Logging
+logging:
+  level:
+    root: INFO
+    uz.greenwhite.gateway: DEBUG
+    org.apache.kafka: WARN

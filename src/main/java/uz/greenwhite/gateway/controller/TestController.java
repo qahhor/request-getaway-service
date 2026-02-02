@@ -1,0 +1,93 @@
+package uz.greenwhite.gateway.controller;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import uz.greenwhite.gateway.kafka.producer.RequestProducer;
+import uz.greenwhite.gateway.model.RequestState;
+import uz.greenwhite.gateway.model.kafka.RequestMessage;
+import uz.greenwhite.gateway.state.RequestStateService;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Test controller for manual testing
+ * DELETE THIS IN PRODUCTION!
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/test")
+@RequiredArgsConstructor
+public class TestController {
+
+    private final RequestProducer requestProducer;
+    private final RequestStateService requestStateService;
+
+    /**
+     * Send test request to Kafka
+     *
+     * Example: POST http://localhost:8090/api/test/send
+     */
+    @PostMapping("/send")
+    public ResponseEntity<Map<String, Object>> sendTestRequest() {
+        // Create test request
+        RequestMessage request = RequestMessage.builder()
+                .companyId(100L)
+                .requestId(System.currentTimeMillis())  // Unique ID
+                .filialId(1L)
+                .endpointId(1L)
+                .baseUrl("https://httpbin.org")  // Free test API
+                .uri("/post")
+                .method("POST")
+                .headers(Map.of("X-Test-Header", "test-value"))
+                .body("{\"test\": \"data\", \"timestamp\": \"" + LocalDateTime.now() + "\"}")
+                .callbackProcedure("bmb_test.process_response")
+                .projectCode("TEST")
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        // Send to Kafka
+        requestProducer.sendRequest(request);
+
+        // Response
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "sent");
+        response.put("compositeId", request.getCompositeId());
+        response.put("message", "Request sent to Kafka topic: bmb.request.new");
+
+        log.info("Test request sent: {}", request.getCompositeId());
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Check request state in Redis
+     *
+     * Example: GET http://localhost:8090/api/test/state/100:1234567890
+     */
+    @GetMapping("/state/{compositeId}")
+    public ResponseEntity<Object> getState(@PathVariable String compositeId) {
+        return requestStateService.getState(compositeId)
+                .map(state -> ResponseEntity.ok((Object) state))
+                .orElse(ResponseEntity.ok(Map.of(
+                        "status", "not_found",
+                        "compositeId", compositeId
+                )));
+    }
+
+    /**
+     * Health check
+     *
+     * Example: GET http://localhost:8090/api/test/health
+     */
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of(
+                "status", "UP",
+                "service", "request-gateway-service",
+                "timestamp", LocalDateTime.now().toString()
+        ));
+    }
+}
