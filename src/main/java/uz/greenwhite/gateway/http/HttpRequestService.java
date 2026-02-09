@@ -1,5 +1,9 @@
 package uz.greenwhite.gateway.http;
 
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -21,12 +25,39 @@ import java.util.Map;
 public class HttpRequestService {
 
     private final WebClient webClient;
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+
+    private CircuitBreaker circuitBreaker;
+
+    @PostConstruct
+    public void init() {
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("externalApi");
+
+        // State o'zgarishlarini log qilish
+        circuitBreaker.getEventPublisher()
+                .onStateTransition(event ->
+                        log.warn("⚡ Circuit Breaker state change: {}", event.getStateTransition()))
+                .onFailureRateExceeded(event ->
+                        log.warn("⚠ Circuit Breaker failure rate exceeded: {}%", event.getFailureRate()))
+                .onSlowCallRateExceeded(event ->
+                        log.warn("⚠ Circuit Breaker slow call rate exceeded: {}%", event.getSlowCallRate()));
+    }
 
     /**
-     * Send HTTP request to external API
+     * Send HTTP request with Circuit Breaker protection
      */
     public Mono<ResponseMessage> sendRequest(RequestMessage request) {
         String compositeId = request.getCompositeId();
+
+        // 1. Circuit Breaker OPEN bo'lsa — darhol reject
+        try {
+            circuitBreaker.acquirePermission();
+        } catch (CallNotPermittedException ex) {
+            log.warn("Circuit breaker OPEN — request blocked: {}", compositeId);
+            return Mono.just(buildCircuitBreakerResponse(request));
+        }
+
+        long startTime = System.nanoTime();
         String fullUrl = buildFullUrl(request);
         HttpMethod method = HttpMethod.valueOf(request.getMethod().toUpperCase());
 
@@ -47,11 +78,31 @@ public class HttpRequestService {
                             .defaultIfEmpty("")
                             .map(body -> buildSuccessResponse(request, statusCode, contentType, body));
                 })
-                .doOnSuccess(resp -> log.info("HTTP response received: {} -> status={}",
-                        compositeId, resp.getHttpStatus()))
-                .doOnError(ex -> log.error("HTTP request failed: {} -> {}",
-                        compositeId, ex.getMessage()))
-                .onErrorResume(ex -> Mono.just(buildErrorResponse(request, ex)));
+                .doOnSuccess(resp -> {
+                    long duration = System.nanoTime() - startTime;
+                    int status = resp.getHttpStatus();
+
+                    if (status >= 200 && status < 500) {
+                        // 2xx, 3xx, 4xx — API ishlayapti, CB success
+                        circuitBreaker.onSuccess(duration, java.util.concurrent.TimeUnit.NANOSECONDS);
+                        if (status >= 400) {
+                            log.warn("HTTP client error (not CB failure): {} -> status={}", compositeId, status);
+                        } else {
+                            log.info("HTTP success: {} -> status={}", compositeId, status);
+                        }
+                    } else {
+                        // 5xx — server error, CB failure
+                        circuitBreaker.onError(duration, java.util.concurrent.TimeUnit.NANOSECONDS,
+                                new RuntimeException("HTTP " + status));
+                        log.warn("HTTP server error (CB failure): {} -> status={}", compositeId, status);
+                    }
+                })
+                .onErrorResume(ex -> {
+                    long duration = System.nanoTime() - startTime;
+                    circuitBreaker.onError(duration, java.util.concurrent.TimeUnit.NANOSECONDS, ex);
+                    log.error("HTTP request failed: {} -> {}", compositeId, ex.getMessage());
+                    return Mono.just(buildErrorResponse(request, ex));
+                });
     }
 
     /**
@@ -75,13 +126,24 @@ public class HttpRequestService {
      * Add headers to request
      */
     private void addHeaders(HttpHeaders httpHeaders, Map<String, String> customHeaders) {
-        // Default headers
         httpHeaders.setContentType(MediaType.APPLICATION_JSON);
-
-        // Custom headers from request
         if (customHeaders != null) {
             customHeaders.forEach(httpHeaders::add);
         }
+    }
+
+    /**
+     * Circuit Breaker OPEN response
+     */
+    private ResponseMessage buildCircuitBreakerResponse(RequestMessage request) {
+        return ResponseMessage.builder()
+                .companyId(request.getCompanyId())
+                .requestId(request.getRequestId())
+                .httpStatus(503)
+                .errorMessage("Circuit breaker is OPEN: external API unavailable")
+                .errorSource("CIRCUIT_BREAKER")
+                .processedAt(LocalDateTime.now())
+                .build();
     }
 
     /**

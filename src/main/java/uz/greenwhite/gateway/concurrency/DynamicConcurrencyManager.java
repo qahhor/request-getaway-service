@@ -101,8 +101,15 @@ public class DynamicConcurrencyManager {
         // Apply new concurrency
         try {
             concurrent.setConcurrency(newConcurrency);
-            concurrent.stop();
-            concurrent.start();
+
+            // stop/start o'rniga — faqat keyingi rebalance da qo'llaniladi
+            // Bu mavjud threadlarni to'xtatmaydi, faqat yangi concurrency ni belgilaydi
+            if (newConcurrency > current) {
+                // Scale UP — yangi threadlar qo'shish uchun restart kerak
+                concurrent.stop();
+                concurrent.start();
+            }
+            // Scale DOWN — stop/start qilmaymiz, keyingi rebalance da tushadi
 
             currentConcurrency.set(newConcurrency);
             lastScaleTime.set(now);
