@@ -25,9 +25,10 @@ public class ResponseConsumer {
      * Consume responses and save to Oracle
      */
     @KafkaListener(
+            id = "responseConsumer",
             topics = "${gateway.kafka.topics.request-response}",
             groupId = "${spring.kafka.consumer.group-id}",
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "responseConsumerFactory"
     )
     public void consumeResponse(ConsumerRecord<String, ResponseMessage> record, Acknowledgment ack) {
         String key = record.key();

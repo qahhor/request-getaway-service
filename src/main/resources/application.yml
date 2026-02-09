@@ -11,7 +11,7 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "uz.greenwhite.gateway.model"
+        spring.json.trusted.packages: "uz.greenwhite.gateway.*"
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -66,12 +66,21 @@ gateway:
       request-callback: bmb.request.callback
       request-dlq: bmb.request.dlq
   biruni:
-    base-url: http://localhost:8080/smartup24/
+    base-url: http://localhost:8080/smartup24
     username: admin@head
     password: greenwhite
     request-pull-uri: /b/biruni/bmb/requests$pull
     response-save-uri: /b/biruni/bmb/requests$save
     connection-timeout: 60
+  concurrency:
+    min-concurrency: 3
+    max-concurrency: 15
+    monitor-interval-ms: 10000
+    scale-up-threshold: 50
+    scale-down-threshold: 10
+    scale-step: 2
+    scale-cooldown-ms: 30000
+    topic-partitions: 10
 
 # Logging
 logging:
